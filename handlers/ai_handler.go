@@ -1,8 +1,8 @@
 // handlers/ai_handler.go — Handler HTTP untuk endpoint AI Generation (OpenAI & Anthropic Compatible)
 // Mendukung:
-// - POST /v1/messages (Dual-mode: Single prompt & Anthropic Messages API untuk 9router)
+// - POST /v1/messages (Dual-mode: Single prompt & Anthropic Messages API untuk 9router dengan full SSE streaming)
 // - GET  /v1/models & /models (OpenAI & Anthropic model list untuk 9router "Import from /models")
-// - POST /v1/chat/completions & /chat/completions (OpenAI chat completions)
+// - POST /v1/chat/completions & /chat/completions (OpenAI chat completions dengan full SSE streaming untuk Trae/Cursor)
 
 package handlers
 
@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"ai-generate-api/config"
@@ -39,7 +40,6 @@ func NewAIHandler(env *config.EnvConfig) *AIHandler {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. POST /v1/messages — Endpoint Dual-Mode (Single Prompt & Anthropic Format)
-// 9router menggunakan mode "Anthropic Compatible" yang mengirim field "messages"
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (h *AIHandler) Generate(c *gin.Context) {
@@ -49,7 +49,6 @@ func (h *AIHandler) Generate(c *gin.Context) {
 		return
 	}
 
-	// Cek apakah request berupa JSON umum
 	var genericPayload map[string]interface{}
 	if err := json.Unmarshal(rawData, &genericPayload); err != nil {
 		utils.ErrorResponse(c, http.StatusBadRequest, "Format JSON tidak valid", err.Error())
@@ -97,14 +96,18 @@ func (h *AIHandler) Generate(c *gin.Context) {
 	})
 }
 
-// handleAnthropicMessages menangani request dengan format Anthropic Messages API (dari 9router)
+// handleAnthropicMessages menangani request Anthropic Messages API (dari 9router / Trae)
+// Mendukung request streaming (stream: true) dengan format Server-Sent Events (SSE)
 func (h *AIHandler) handleAnthropicMessages(c *gin.Context, payload map[string]interface{}) {
 	model, _ := payload["model"].(string)
 	if model == "" {
 		model = h.Env.HFModel
 	}
 
-	// Ekstrak pesan dari payload Anthropic untuk diteruskan ke HuggingFace Router
+	// Cek apakah client meminta streaming (Trae dan 9router secara default meminta stream: true)
+	isStream, _ := payload["stream"].(bool)
+
+	// Ekstrak pesan dari payload Anthropic
 	rawMessagesList, ok := payload["messages"].([]interface{})
 	if !ok || len(rawMessagesList) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -117,7 +120,6 @@ func (h *AIHandler) handleAnthropicMessages(c *gin.Context, payload map[string]i
 		return
 	}
 
-	// Normalisasi messages agar kompatibel dengan format chat HuggingFace Router
 	type simpleChatMsg struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`
@@ -139,7 +141,6 @@ func (h *AIHandler) handleAnthropicMessages(c *gin.Context, payload map[string]i
 		case string:
 			textContent = v
 		case []interface{}:
-			// Format blok Anthropic: [{"type": "text", "text": "..."}]
 			for _, block := range v {
 				if blockMap, ok := block.(map[string]interface{}); ok {
 					if t, ok := blockMap["text"].(string); ok {
@@ -155,10 +156,11 @@ func (h *AIHandler) handleAnthropicMessages(c *gin.Context, payload map[string]i
 		})
 	}
 
-	// Siapkan request OpenAI-compatible untuk HuggingFace Router
+	// Selalu minta respons lengkap (stream: false) dari HuggingFace Router
 	hfPayload := map[string]interface{}{
 		"model":    model,
 		"messages": normalizedMessages,
+		"stream":   false,
 	}
 	if maxTokens, ok := payload["max_tokens"].(float64); ok && maxTokens > 0 {
 		hfPayload["max_tokens"] = int(maxTokens)
@@ -183,7 +185,6 @@ func (h *AIHandler) handleAnthropicMessages(c *gin.Context, payload map[string]i
 		return
 	}
 
-	// Parse response dari HuggingFace Router untuk dikonversi ke format Anthropic
 	var hfResp struct {
 		Choices []struct {
 			Message struct {
@@ -198,16 +199,118 @@ func (h *AIHandler) handleAnthropicMessages(c *gin.Context, payload map[string]i
 	}
 
 	if err := json.Unmarshal(respBytes, &hfResp); err != nil || len(hfResp.Choices) == 0 {
-		// Jika gagal parse, kembalikan response apa adanya
 		c.Data(statusCode, "application/json", respBytes)
 		return
 	}
 
-	// Format response Anthropic resmi yang diharapkan oleh 9router
+	answerText := hfResp.Choices[0].Message.Content
+
 	randBytes := make([]byte, 12)
 	_, _ = rand.Read(randBytes)
 	msgID := fmt.Sprintf("msg_%s", hex.EncodeToString(randBytes))
 
+	// ── JIKA CLIENT MEMINTA STREAMING (stream: true) ──
+	// Mengirimkan Server-Sent Events (SSE) format Anthropic yang dinantikan 9router / Trae
+	if isStream {
+		c.Header("Content-Type", "text/event-stream; charset=utf-8")
+		c.Header("Cache-Control", "no-cache")
+		c.Header("Connection", "keep-alive")
+		c.Header("X-Accel-Buffering", "no")
+
+		// 1. event: message_start
+		msgStart, _ := json.Marshal(map[string]interface{}{
+			"type": "message_start",
+			"message": map[string]interface{}{
+				"id":            msgID,
+				"type":          "message",
+				"role":          "assistant",
+				"model":         model,
+				"content":       []interface{}{},
+				"stop_reason":   nil,
+				"stop_sequence": nil,
+				"usage": map[string]interface{}{
+					"input_tokens":  hfResp.Usage.PromptTokens,
+					"output_tokens": 1,
+				},
+			},
+		})
+		fmt.Fprintf(c.Writer, "event: message_start\ndata: %s\n\n", msgStart)
+		c.Writer.Flush()
+
+		// 2. event: content_block_start
+		blockStart, _ := json.Marshal(map[string]interface{}{
+			"type":  "content_block_start",
+			"index": 0,
+			"content_block": map[string]interface{}{
+				"type": "text",
+				"text": "",
+			},
+		})
+		fmt.Fprintf(c.Writer, "event: content_block_start\ndata: %s\n\n", blockStart)
+		c.Writer.Flush()
+
+		// 3. event: content_block_delta (pecah teks dalam potongan kecil)
+		words := strings.Fields(answerText)
+		if len(words) == 0 {
+			words = []string{answerText}
+		}
+
+		chunkSize := 3
+		for i := 0; i < len(words); i += chunkSize {
+			end := i + chunkSize
+			if end > len(words) {
+				end = len(words)
+			}
+			chunkText := strings.Join(words[i:end], " ")
+			if end < len(words) {
+				chunkText += " "
+			}
+
+			delta, _ := json.Marshal(map[string]interface{}{
+				"type":  "content_block_delta",
+				"index": 0,
+				"delta": map[string]interface{}{
+					"type": "text_delta",
+					"text": chunkText,
+				},
+			})
+			fmt.Fprintf(c.Writer, "event: content_block_delta\ndata: %s\n\n", delta)
+			c.Writer.Flush()
+			time.Sleep(5 * time.Millisecond)
+		}
+
+		// 4. event: content_block_stop
+		blockStop, _ := json.Marshal(map[string]interface{}{
+			"type":  "content_block_stop",
+			"index": 0,
+		})
+		fmt.Fprintf(c.Writer, "event: content_block_stop\ndata: %s\n\n", blockStop)
+		c.Writer.Flush()
+
+		// 5. event: message_delta
+		msgDelta, _ := json.Marshal(map[string]interface{}{
+			"type": "message_delta",
+			"delta": map[string]interface{}{
+				"stop_reason":   "end_turn",
+				"stop_sequence": nil,
+			},
+			"usage": map[string]interface{}{
+				"output_tokens": hfResp.Usage.CompletionTokens,
+			},
+		})
+		fmt.Fprintf(c.Writer, "event: message_delta\ndata: %s\n\n", msgDelta)
+		c.Writer.Flush()
+
+		// 6. event: message_stop
+		msgStop, _ := json.Marshal(map[string]interface{}{
+			"type": "message_stop",
+		})
+		fmt.Fprintf(c.Writer, "event: message_stop\ndata: %s\n\n", msgStop)
+		c.Writer.Flush()
+		return
+	}
+
+	// ── JIKA NON-STREAMING (stream: false) ──
 	anthropicResp := dto.AnthropicMessageResponse{
 		ID:    msgID,
 		Type:  "message",
@@ -216,7 +319,7 @@ func (h *AIHandler) handleAnthropicMessages(c *gin.Context, payload map[string]i
 		Content: []dto.AnthropicContentBlock{
 			{
 				Type: "text",
-				Text: hfResp.Choices[0].Message.Content,
+				Text: answerText,
 			},
 		},
 		StopReason: "end_turn",
@@ -296,6 +399,7 @@ func (h *AIHandler) GetModelDetail(c *gin.Context) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 4. POST /v1/chat/completions & /chat/completions — OpenAI Standard Chat
+// Mendukung streaming (stream: true) untuk aplikasi yang memanggil via format OpenAI
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (h *AIHandler) ChatCompletions(c *gin.Context) {
@@ -311,25 +415,137 @@ func (h *AIHandler) ChatCompletions(c *gin.Context) {
 	}
 
 	var payload map[string]interface{}
-	if err := json.Unmarshal(rawData, &payload); err == nil {
-		if m, ok := payload["model"].(string); !ok || m == "" {
-			payload["model"] = h.Env.HFModel
-			if modifiedData, err := json.Marshal(payload); err == nil {
-				rawData = modifiedData
-			}
-		}
-	}
-
-	respBytes, statusCode, err := h.HFService.ForwardChatCompletions(rawData)
-	if err != nil {
-		c.JSON(statusCode, gin.H{
+	if err := json.Unmarshal(rawData, &payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
 			"error": gin.H{
-				"message": err.Error(),
-				"type":    "api_error",
+				"message": "Format JSON tidak valid: " + err.Error(),
+				"type":    "invalid_request_error",
 			},
 		})
 		return
 	}
 
-	c.Data(statusCode, "application/json; charset=utf-8", respBytes)
+	// Model default
+	model, _ := payload["model"].(string)
+	if model == "" {
+		model = h.Env.HFModel
+		payload["model"] = model
+	}
+
+	isStream, _ := payload["stream"].(bool)
+
+	// Pastikan ke HuggingFace selalu non-stream agar dapat respons lengkap dengan stabil
+	payload["stream"] = false
+	if modifiedData, err := json.Marshal(payload); err == nil {
+		rawData = modifiedData
+	}
+
+	respBytes, statusCode, err := h.HFService.ForwardChatCompletions(rawData)
+	if err != nil || statusCode != http.StatusOK {
+		c.Data(statusCode, "application/json", respBytes)
+		return
+	}
+
+	// Jika non-stream, kembalikan JSON standar OpenAI
+	if !isStream {
+		c.Data(statusCode, "application/json; charset=utf-8", respBytes)
+		return
+	}
+
+	// Jika stream: true, kirim SSE chunk format OpenAI
+	var chatResp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+
+	if err := json.Unmarshal(respBytes, &chatResp); err != nil || len(chatResp.Choices) == 0 {
+		c.Data(statusCode, "application/json", respBytes)
+		return
+	}
+
+	answerText := chatResp.Choices[0].Message.Content
+
+	c.Header("Content-Type", "text/event-stream; charset=utf-8")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+
+	now := time.Now().Unix()
+	chatCmplID := fmt.Sprintf("chatcmpl-%d", now)
+
+	// Chunk 1: Role
+	roleChunk, _ := json.Marshal(map[string]interface{}{
+		"id":      chatCmplID,
+		"object":  "chat.completion.chunk",
+		"created": now,
+		"model":   model,
+		"choices": []map[string]interface{}{
+			{
+				"index": 0,
+				"delta": map[string]interface{}{
+					"role": "assistant",
+				},
+				"finish_reason": nil,
+			},
+		},
+	})
+	fmt.Fprintf(c.Writer, "data: %s\n\n", roleChunk)
+	c.Writer.Flush()
+
+	// Chunk 2+: Content in words
+	words := strings.Fields(answerText)
+	if len(words) == 0 {
+		words = []string{answerText}
+	}
+	chunkSize := 3
+	for i := 0; i < len(words); i += chunkSize {
+		end := i + chunkSize
+		if end > len(words) {
+			end = len(words)
+		}
+		chunkText := strings.Join(words[i:end], " ")
+		if end < len(words) {
+			chunkText += " "
+		}
+
+		contentChunk, _ := json.Marshal(map[string]interface{}{
+			"id":      chatCmplID,
+			"object":  "chat.completion.chunk",
+			"created": now,
+			"model":   model,
+			"choices": []map[string]interface{}{
+				{
+					"index": 0,
+					"delta": map[string]interface{}{
+						"content": chunkText,
+					},
+					"finish_reason": nil,
+				},
+			},
+		})
+		fmt.Fprintf(c.Writer, "data: %s\n\n", contentChunk)
+		c.Writer.Flush()
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// Final chunk: stop
+	stopChunk, _ := json.Marshal(map[string]interface{}{
+		"id":      chatCmplID,
+		"object":  "chat.completion.chunk",
+		"created": now,
+		"model":   model,
+		"choices": []map[string]interface{}{
+			{
+				"index":         0,
+				"delta":         map[string]interface{}{},
+				"finish_reason": "stop",
+			},
+		},
+	})
+	fmt.Fprintf(c.Writer, "data: %s\n\n", stopChunk)
+	fmt.Fprintf(c.Writer, "data: [DONE]\n\n")
+	c.Writer.Flush()
 }

@@ -144,8 +144,8 @@ Authorization: Bearer {{userApiKey}}
   ]
 }
 
-### 6.2 Chat Completions — POST /chat/completions (Untuk router dengan baseURL .../v1)
-POST {{baseUrl}}/chat/completions
+### 6.3 Chat Completions — POST /v1/chat/completions dengan STREAMING (stream: true)
+POST {{baseUrl}}/v1/chat/completions
 Content-Type: application/json
 Authorization: Bearer {{userApiKey}}
 
@@ -154,10 +154,28 @@ Authorization: Bearer {{userApiKey}}
   "messages": [
     {
       "role": "user",
-      "content": "Jelaskan apa itu REST API dalam 1 kalimat."
+      "content": "Hitung 1 sampai 5."
     }
-  ]
+  ],
+  "stream": true
 }
+
+### 6.4 Anthropic Messages — POST /v1/messages dengan STREAMING (stream: true) [Format Trae / 9router]
+POST {{baseUrl}}/v1/messages
+Content-Type: application/json
+x-api-key: {{userApiKey}}
+
+{
+  "model": "zai-org/GLM-5.3:novita",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Halo, tes streaming dari 9router."
+    }
+  ],
+  "stream": true
+}
+
 
 
 ### ====================================================================
