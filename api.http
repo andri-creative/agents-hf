@@ -1,0 +1,178 @@
+### ====================================================================
+### REST API TESTING SUITE — AI GENERATE GATEWAY (HUGGING FACE)
+### ====================================================================
+### Gunakan extension "REST Client" (VS Code) atau bawaan IDE / JetBrains.
+### Jalankan server terlebih dahulu: `go run main.go`
+### ====================================================================
+
+@baseUrl = http://localhost:8080
+
+# Variabel manual (isi di sini jika ingin paste token secara manual)
+@authToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoxLCJ1c2VybmFtZSI6ImJ1ZGkxMjMiLCJpc3MiOiJhaS1nZW5lcmF0ZS1hcGkiLCJleHAiOjE3OTA5MDg0NTAsImlhdCI6MTc5MDgyMjA1MH0.PNkid3aBxlLqRqliJYUcCOv4kEY-6su_N0sxlF1fN98
+@userApiKey = hf_a83ce77f1d4603cbc2ddce83453d8de1f4fceda654705c7355c8ddc0a1944017
+
+
+### ====================================================================
+### 1. HEALTH CHECK
+### ====================================================================
+
+# @name healthCheck
+GET {{baseUrl}}/health
+Accept: application/json
+
+
+### ====================================================================
+### 2. AUTHENTICATION — REGISTER
+### ====================================================================
+
+### 2.1 Register User Baru (Sukses)
+### Response akan mengembalikan api_token dan data user
+# @name register
+POST {{baseUrl}}/api/register
+Content-Type: application/json
+
+{
+  "full_name": "Budi Santoso",
+  "username": "budi123",
+  "password": "rahasia123"
+}
+
+### 2.2 Register — Validasi Error (Password kurang dari 6 karakter) [Expect: 400 Bad Request]
+POST {{baseUrl}}/api/register
+Content-Type: application/json
+
+{
+  "full_name": "Bu",
+  "username": "b",
+  "password": "123"
+}
+
+### 2.3 Register — Conflict Error (Username sudah terdaftar) [Expect: 409 Conflict]
+POST {{baseUrl}}/api/register
+Content-Type: application/json
+
+{
+  "full_name": "Budi Santoso",
+  "username": "budi123",
+  "password": "rahasia123"
+}
+
+
+### ====================================================================
+### 3. AUTHENTICATION — LOGIN
+### ====================================================================
+
+### 3.1 Login (Sukses)
+### Response akan mengembalikan jwt_token & api_token
+# @name login
+POST {{baseUrl}}/api/login
+Content-Type: application/json
+
+{
+  "username": "budi123",
+  "password": "rahasia123"
+}
+
+### 3.2 Login — Kredensial Salah [Expect: 401 Unauthorized]
+POST {{baseUrl}}/api/login
+Content-Type: application/json
+
+{
+  "username": "budi123",
+  "password": "password_salah"
+}
+
+
+### ====================================================================
+### 4. USER PROFILE (PROTECTED BY JWT)
+### ====================================================================
+
+### 4.1 Get Profile — Mengambil token otomatis dari response login
+### Jika client mendukung dynamic variable:
+GET {{baseUrl}}/api/me
+Authorization: Bearer {{login.response.body.data.jwt_token}}
+Accept: application/json
+
+### 4.2 Get Profile — Menggunakan variable manual @authToken
+GET {{baseUrl}}/api/me
+Authorization: Bearer {{authToken}}
+Accept: application/json
+
+### 4.3 Get Profile — Tanpa Token / Token Kosong [Expect: 401 Unauthorized]
+GET {{baseUrl}}/api/me
+Accept: application/json
+
+
+### ====================================================================
+### 5. AI GENERATE (PROTECTED BY API KEY)
+### ====================================================================
+
+### 5.1 AI Generate — Menggunakan model default dari .env (zai-org/GLM-5.3:novita)
+### API Token diambil otomatis dari response login / register
+# @name aiGenerateDefault
+POST {{baseUrl}}/v1/messages
+Content-Type: application/json
+X-API-Key: {{login.response.body.data.api_token}}
+
+{
+  "prompt": "Jelaskan keunggulan bahasa Go (Golang) dalam 2 kalimat singkat."
+}
+
+### 5.2 AI Generate — Custom Model & Prompt Bahasa Inggris
+POST {{baseUrl}}/v1/messages
+Content-Type: application/json
+X-API-Key: {{login.response.body.data.api_token}}
+
+{
+  "model": "zai-org/GLM-5.3:novita",
+  "prompt": "Halo, Apa itu AI?"
+}
+
+### 5.3 AI Generate — Menggunakan Header Authorization: Bearer <api_token>
+POST {{baseUrl}}/v1/messages
+Content-Type: application/json
+Authorization: Bearer {{login.response.body.data.api_token}}
+
+{
+  "prompt": "Sebutkan 3 tips produktivitas programming."
+}
+
+### 5.4 AI Generate — Menggunakan variable manual @userApiKey
+POST {{baseUrl}}/v1/messages
+Content-Type: application/json
+X-API-Key: {{userApiKey}}
+
+{
+  "prompt": "Halo AI, perkenalkan dirimu!"
+}
+
+
+### ====================================================================
+### 6. NEGATIVE TESTING / ERROR CASES UNTUK AI ENDPOINT
+### ====================================================================
+
+### 6.1 AI Generate — Tanpa API Key [Expect: 401 Unauthorized]
+POST {{baseUrl}}/v1/messages
+Content-Type: application/json
+
+{
+  "prompt": "Tes tanpa API key"
+}
+
+### 6.2 AI Generate — API Key Salah / Palsu [Expect: 401 Unauthorized]
+POST {{baseUrl}}/v1/messages
+Content-Type: application/json
+X-API-Key: hf_invalid_token_1234567890
+
+{
+  "prompt": "Tes dengan token palsu"
+}
+
+### 6.3 AI Generate — Prompt Kosong / Validasi Gagal [Expect: 400 Bad Request]
+POST {{baseUrl}}/v1/messages
+Content-Type: application/json
+X-API-Key: {{login.response.body.data.api_token}}
+
+{
+  "prompt": ""
+}
