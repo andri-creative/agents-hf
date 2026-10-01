@@ -1,10 +1,13 @@
 // middleware/auth_middleware.go — Middleware autentikasi untuk melindungi endpoint
 // Berisi 2 middleware: JWTAuth (untuk /api/me) dan APIKeyAuth (untuk /v1/messages)
+// [UPGRADE v3] — Menyimpan role dari JWT ke context untuk endpoint admin.
+// [UPGRADE 1] — APIKeyAuth mencari token di tabel api_tokens (bukan lagi users.api_token).
 
 package middleware
 
 import (
 	"strings"
+	"time"
 
 	"ai-generate-api/config"
 	"ai-generate-api/models"
@@ -46,6 +49,7 @@ func JWTAuth(jwtSecret string) gin.HandlerFunc {
 		// Simpan data user ke context untuk digunakan di handler
 		c.Set("user_id", claims.UserID)
 		c.Set("username", claims.Username)
+		c.Set("role", claims.Role)
 
 		c.Next()
 	}
@@ -78,10 +82,30 @@ func APIKeyAuth() gin.HandlerFunc {
 			return
 		}
 
-		// Cari user di database berdasarkan api_token
+		// [UPGRADE 1] — Cari token di tabel api_tokens dengan kondisi:
+		// token cocok, masih aktif, dan belum kadaluarsa (expires_at NULL dianggap tidak kadaluarsa).
+		var apiTokenRecord models.APIToken
+		if err := config.DB.
+			Where("token = ? AND is_active = ?", apiToken, true).
+			Where("expires_at IS NULL OR expires_at > ?", time.Now()).
+			First(&apiTokenRecord).Error; err != nil {
+			utils.ErrorResponse(c, 401, "API Key tidak valid", "API Key tidak ditemukan atau sudah tidak aktif")
+			c.Abort()
+			return
+		}
+
+		// Cari user pemilik token untuk melengkapi data di context
 		var user models.User
-		if err := config.DB.Where("api_token = ?", apiToken).First(&user).Error; err != nil {
-			utils.ErrorResponse(c, 401, "API Key tidak valid", "API Key tidak ditemukan di sistem")
+		if err := config.DB.First(&user, apiTokenRecord.UserID).Error; err != nil {
+			utils.ErrorResponse(c, 401, "API Key tidak valid", "User pemilik API Key tidak ditemukan")
+			c.Abort()
+			return
+		}
+
+		// [UPGRADE 1] — Catat waktu pemakaian token terakhir.
+		now := time.Now()
+		if err := config.DB.Model(&apiTokenRecord).Update("last_used_at", now).Error; err != nil {
+			utils.ErrorResponse(c, 401, "API Key tidak valid", "Gagal memperbarui status pemakaian token")
 			c.Abort()
 			return
 		}

@@ -62,8 +62,8 @@ func InitDB(env *EnvConfig) {
 	if err != nil {
 		log.Fatalf("[FATAL] Gagal mendapatkan instance sql.DB: %v", err)
 	}
-	sqlDB.SetMaxOpenConns(10)  // Maksimum 10 koneksi aktif
-	sqlDB.SetMaxIdleConns(5)   // Maksimum 5 koneksi idle
+	sqlDB.SetMaxOpenConns(10)   // Maksimum 10 koneksi aktif
+	sqlDB.SetMaxIdleConns(5)    // Maksimum 5 koneksi idle
 	sqlDB.SetConnMaxLifetime(0) // Tanpa batas waktu koneksi
 
 	// Simpan instance ke variabel global

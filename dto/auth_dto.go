@@ -1,5 +1,6 @@
 // dto/auth_dto.go — Data Transfer Objects untuk endpoint autentikasi (register & login)
 // Mendefinisikan struktur request/response dengan validasi menggunakan go-playground/validator
+// [UPGRADE v3] — Menambahkan role ke response user agar status admin terlihat.
 
 package dto
 
@@ -21,6 +22,7 @@ type UserResponse struct {
 	ID        uint   `json:"id"`
 	FullName  string `json:"full_name"`
 	Username  string `json:"username"`
+	Role      string `json:"role,omitempty"`
 	APIToken  string `json:"api_token,omitempty"`
 	CreatedAt string `json:"created_at"`
 }

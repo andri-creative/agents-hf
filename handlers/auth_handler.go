@@ -1,6 +1,7 @@
 // handlers/auth_handler.go — Handler HTTP untuk endpoint autentikasi
 // Menangani: Register (/api/register), Login (/api/login), dan Profile (/api/me)
 // Logic berat didelegasikan ke layer service/utils, handler hanya urus HTTP
+// [UPGRADE v3] — Menyimpan role user dan memasukkannya ke JWT/login response.
 
 package handlers
 
@@ -17,6 +18,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
+	"gorm.io/gorm"
 )
 
 // validate adalah instance validator yang digunakan di seluruh handler auth
@@ -81,16 +83,30 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	// Buat record user baru
+	// Buat record user baru (tanpa kolom APIToken — token disimpan di tabel api_tokens)
 	user := models.User{
 		FullName: req.FullName,
 		Username: req.Username,
 		Password: hashedPassword,
-		APIToken: apiToken,
+		Role:     "user",
 	}
 
-	// Simpan ke database
-	if err := config.DB.Create(&user).Error; err != nil {
+	// Simpan user + token dalam satu transaksi agar konsisten
+	if err := config.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&user).Error; err != nil {
+			return err
+		}
+
+		// [UPGRADE 1] — Simpan token pertama user ke tabel api_tokens
+		userToken := models.APIToken{
+			UserID:   user.ID,
+			Token:    apiToken,
+			Name:     "Default Token",
+			IsActive: true,
+		}
+
+		return tx.Create(&userToken).Error
+	}); err != nil {
 		utils.ErrorResponse(c, http.StatusInternalServerError, "Gagal menyimpan user", err.Error())
 		return
 	}
@@ -100,6 +116,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		ID:        user.ID,
 		FullName:  user.FullName,
 		Username:  user.Username,
+		Role:      user.Role,
 		CreatedAt: user.CreatedAt.Format(time.RFC3339),
 	}
 
@@ -145,8 +162,32 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
+	if user.Role == "" {
+		user.Role = "user"
+	}
+
+	// [UPGRADE 1] — Setiap login berhasil membuat token BARU di tabel api_tokens.
+	// Token lama TIDAK dihapus, sehingga 1 user bisa punya banyak token (multi-device).
+	newAPIToken, err := generateAPIToken()
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusInternalServerError, "Gagal generate API token", err.Error())
+		return
+	}
+
+	loginToken := models.APIToken{
+		UserID:   user.ID,
+		Token:    newAPIToken,
+		Name:     "Login dari " + time.Now().Format(time.RFC3339),
+		IsActive: true,
+	}
+
+	if err := config.DB.Create(&loginToken).Error; err != nil {
+		utils.ErrorResponse(c, http.StatusInternalServerError, "Gagal menyimpan API token", err.Error())
+		return
+	}
+
 	// Generate JWT token
-	jwtToken, err := utils.GenerateJWT(user.ID, user.Username, h.JWTSecret, h.JWTExpiredHours)
+	jwtToken, err := utils.GenerateJWT(user.ID, user.Username, user.Role, h.JWTSecret, h.JWTExpiredHours)
 	if err != nil {
 		utils.ErrorResponse(c, http.StatusInternalServerError, "Gagal generate token", err.Error())
 		return
@@ -157,12 +198,13 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		ID:        user.ID,
 		FullName:  user.FullName,
 		Username:  user.Username,
+		Role:      user.Role,
 		CreatedAt: user.CreatedAt.Format(time.RFC3339),
 	}
 
 	utils.SuccessResponse(c, http.StatusOK, "Login berhasil", dto.LoginResponse{
 		JWTToken: jwtToken,
-		APIToken: user.APIToken,
+		APIToken: newAPIToken,
 		User:     userResp,
 	})
 }
@@ -185,10 +227,15 @@ func (h *AuthHandler) GetProfile(c *gin.Context) {
 	}
 
 	// Return data user (password otomatis tersembunyi karena json:"-")
+	if user.Role == "" {
+		user.Role = "user"
+	}
+
 	userResp := dto.UserResponse{
 		ID:        user.ID,
 		FullName:  user.FullName,
 		Username:  user.Username,
+		Role:      user.Role,
 		CreatedAt: user.CreatedAt.Format(time.RFC3339),
 	}
 

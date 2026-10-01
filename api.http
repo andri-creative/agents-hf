@@ -11,6 +11,14 @@
 @authToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoxLCJ1c2VybmFtZSI6ImJ1ZGkxMjMiLCJpc3MiOiJhaS1nZW5lcmF0ZS1hcGkiLCJleHAiOjE3OTA5MTYyMDUsImlhdCI6MTc5MDgyOTgwNX0.g5BRhjQnbW_rh6deQUJrSAPh_t89wknpl8ZECoWaM7s
 @userApiKey = hf_a83ce77f1d4603cbc2ddce83453d8de1f4fceda654705c7355c8ddc0a1944017
 
+# [UPGRADE 1-3] Token admin (isi manual jika ingin pakai JWT admin yang sudah ada)
+@adminToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjo5OSwidXNlcm5hbWUiOiJhZG1pbiIsInJvbGUiOiJhZG1pbiIsImlzcyI6ImFpLWdlbmVyYXRlLWFwaSIsImV4cCI6MTc5MDkxNjIwNSwiaWF0IjoxNzkwODI5ODA1fQ.REPLACE_WITH_REAL_ADMIN_JWT
+
+# ID entitas untuk pengujian (isi sesuai data yang ada di database)
+@tokenId = 1
+@modelId = 1
+@configId = 1
+
 
 ### ====================================================================
 ### 1. HEALTH CHECK
@@ -99,6 +107,87 @@ Accept: application/json
 
 ### 4.3 Get Profile — Tanpa Token / Token Kosong [Expect: 401 Unauthorized]
 GET {{baseUrl}}/api/me
+Accept: application/json
+
+
+### ====================================================================
+### 4B. API TOKEN MANAGEMENT (PROTECTED BY JWT) — [UPGRADE 1]
+### ====================================================================
+### Semua endpoint di bawah ini hanya bisa mengelola token MILIK USER YANG LOGIN.
+### Menggunakan jwt_token user biasa (bukan admin).
+
+### 4B.1 List Token — GET /api/tokens
+### Menampilkan semua token milik user yang login
+# @name listTokens
+GET {{baseUrl}}/api/tokens
+Authorization: Bearer {{login.response.body.data.jwt_token}}
+Accept: application/json
+
+### 4B.2 Create Token — POST /api/tokens (Sukses) [Expect: 201 Created]
+# @name createToken
+POST {{baseUrl}}/api/tokens
+Authorization: Bearer {{login.response.body.data.jwt_token}}
+Content-Type: application/json
+
+{
+  "name": "Token Laptop Kerja"
+}
+
+### 4B.3 Create Token — Dengan ExpiresAt
+POST {{baseUrl}}/api/tokens
+Authorization: Bearer {{login.response.body.data.jwt_token}}
+Content-Type: application/json
+
+{
+  "name": "Token Sementara",
+  "expires_at": "2027-01-01T00:00:00Z"
+}
+
+### 4B.4 Create Token — Validasi Gagal (name kosong) [Expect: 400 Bad Request]
+POST {{baseUrl}}/api/tokens
+Authorization: Bearer {{login.response.body.data.jwt_token}}
+Content-Type: application/json
+
+{
+  "name": ""
+}
+
+### 4B.5 Detail Token — GET /api/tokens/{{tokenId}}
+GET {{baseUrl}}/api/tokens/{{tokenId}}
+Authorization: Bearer {{login.response.body.data.jwt_token}}
+Accept: application/json
+
+### 4B.6 Detail Token — Token Milik User Lain / Tidak Ada [Expect: 404 Not Found]
+GET {{baseUrl}}/api/tokens/999999
+Authorization: Bearer {{login.response.body.data.jwt_token}}
+Accept: application/json
+
+### 4B.7 Update Status Token — PUT /api/tokens/{{tokenId}}/status (Nonaktifkan)
+### Setelah dinonaktifkan, token ini akan ditolak oleh APIKeyAuth (401)
+PUT {{baseUrl}}/api/tokens/{{tokenId}}/status
+Authorization: Bearer {{login.response.body.data.jwt_token}}
+Content-Type: application/json
+
+{
+  "is_active": false
+}
+
+### 4B.8 Update Status Token — Aktifkan Kembali
+PUT {{baseUrl}}/api/tokens/{{tokenId}}/status
+Authorization: Bearer {{login.response.body.data.jwt_token}}
+Content-Type: application/json
+
+{
+  "is_active": true
+}
+
+### 4B.9 Delete Token — DELETE /api/tokens/{{tokenId}} (Hard Delete)
+DELETE {{baseUrl}}/api/tokens/{{tokenId}}
+Authorization: Bearer {{login.response.body.data.jwt_token}}
+Accept: application/json
+
+### 4B.10 List Token — Tanpa JWT [Expect: 401 Unauthorized]
+GET {{baseUrl}}/api/tokens
 Accept: application/json
 
 
@@ -240,3 +329,209 @@ X-API-Key: {{userApiKey}}
 {
   "prompt": ""
 }
+
+### 8.4 AI Generate — Model Tidak Ada / Nonaktif di DB [Expect: 400 Bad Request]
+POST {{baseUrl}}/v1/messages
+Content-Type: application/json
+X-API-Key: {{userApiKey}}
+
+{
+  "model": "model/tidak-ada-di-db",
+  "prompt": "Tes model yang tidak terdaftar"
+}
+
+
+### ====================================================================
+### 9. ADMIN — AI MODELS CRUD (PROTECTED BY JWT + ADMIN ONLY) — [UPGRADE 2]
+### ====================================================================
+### Semua endpoint membutuhkan JWT dengan role "admin".
+### Login dulu sebagai admin (ADMIN_USERNAME / ADMIN_PASSWORD dari .env), lalu
+### JWT-nya otomatis dipakai via {{adminLogin.response.body.data.jwt_token}}.
+
+### 9.0 Login Admin — ambil JWT admin untuk dipakai section berikutnya
+# @name adminLogin
+POST {{baseUrl}}/api/login
+Content-Type: application/json
+
+{
+  "username": "admin",
+  "password": "admin123"
+}
+
+### 9.1 List Models — GET /api/admin/models (Semua model, aktif & nonaktif)
+# @name adminListModels
+GET {{baseUrl}}/api/admin/models
+Authorization: Bearer {{adminLogin.response.body.data.jwt_token}}
+Accept: application/json
+
+### 9.2 Create Model — POST /api/admin/models (Sukses) [Expect: 201 Created]
+# @name adminCreateModel
+POST {{baseUrl}}/api/admin/models
+Authorization: Bearer {{adminLogin.response.body.data.jwt_token}}
+Content-Type: application/json
+
+{
+  "name": "Mistral 7B Instruct",
+  "slug": "mistralai/Mistral-7B-Instruct-v0.2",
+  "description": "Model Mistral 7B Instruct",
+  "is_active": true
+}
+
+### 9.3 Create Model — Tanpa is_active (default aktif = true)
+POST {{baseUrl}}/api/admin/models
+Authorization: Bearer {{adminLogin.response.body.data.jwt_token}}
+Content-Type: application/json
+
+{
+  "name": "Qwen 2.5 72B Instruct",
+  "slug": "Qwen/Qwen2.5-72B-Instruct",
+  "description": "Model Qwen 72B"
+}
+
+### 9.4 Create Model — Validasi Gagal (name & slug kosong) [Expect: 400 Bad Request]
+POST {{baseUrl}}/api/admin/models
+Authorization: Bearer {{adminLogin.response.body.data.jwt_token}}
+Content-Type: application/json
+
+{
+  "name": "",
+  "slug": ""
+}
+
+### 9.5 Create Model — Slug Duplikat [Expect: 409 Conflict]
+POST {{baseUrl}}/api/admin/models
+Authorization: Bearer {{adminLogin.response.body.data.jwt_token}}
+Content-Type: application/json
+
+{
+  "name": "Mistral Duplikat",
+  "slug": "mistralai/Mistral-7B-Instruct-v0.2",
+  "description": "Slug sama dengan model yang sudah ada"
+}
+
+### 9.6 Detail Model — GET /api/admin/models/{{modelId}}
+GET {{baseUrl}}/api/admin/models/{{modelId}}
+Authorization: Bearer {{adminLogin.response.body.data.jwt_token}}
+Accept: application/json
+
+### 9.7 Detail Model — Tidak Ditemukan [Expect: 404 Not Found]
+GET {{baseUrl}}/api/admin/models/999999
+Authorization: Bearer {{adminLogin.response.body.data.jwt_token}}
+Accept: application/json
+
+### 9.8 Update Model — PUT /api/admin/models/{{modelId}} (Partial update)
+PUT {{baseUrl}}/api/admin/models/{{modelId}}
+Authorization: Bearer {{adminLogin.response.body.data.jwt_token}}
+Content-Type: application/json
+
+{
+  "name": "Mistral 7B Instruct (Updated)",
+  "description": "Deskripsi baru hasil update",
+  "is_active": true
+}
+
+### 9.9 Update Model — Nonaktifkan Model (is_active: false)
+### Setelah nonaktif, model ini akan ditolak saat dipakai di /v1/messages (400)
+PUT {{baseUrl}}/api/admin/models/{{modelId}}
+Authorization: Bearer {{adminLogin.response.body.data.jwt_token}}
+Content-Type: application/json
+
+{
+  "is_active": false
+}
+
+### 9.10 Delete Model — DELETE /api/admin/models/{{modelId}}
+DELETE {{baseUrl}}/api/admin/models/{{modelId}}
+Authorization: Bearer {{adminLogin.response.body.data.jwt_token}}
+Accept: application/json
+
+### 9.11 Akses Admin — Pakai JWT User Biasa [Expect: 403 Forbidden]
+GET {{baseUrl}}/api/admin/models
+Authorization: Bearer {{login.response.body.data.jwt_token}}
+Accept: application/json
+
+### 9.12 Akses Admin — Tanpa JWT [Expect: 401 Unauthorized]
+GET {{baseUrl}}/api/admin/models
+Accept: application/json
+
+
+### ====================================================================
+### 10. ADMIN — CONFIGS CRUD (PROTECTED BY JWT + ADMIN ONLY) — [UPGRADE 3]
+### ====================================================================
+### Konfigurasi HuggingFace (HF_API_KEY, HF_MODEL, HF_BASE_URL) bisa diubah dari DB
+### tanpa restart server. Nilai dibaca dari DB, fallback ke ENV bila belum ada.
+
+### 10.1 List Configs — GET /api/admin/configs
+# @name adminListConfigs
+GET {{baseUrl}}/api/admin/configs
+Authorization: Bearer {{adminLogin.response.body.data.jwt_token}}
+Accept: application/json
+
+### 10.2 Create Config — POST /api/admin/configs (Sukses) [Expect: 201 Created]
+# @name adminCreateConfig
+POST {{baseUrl}}/api/admin/configs
+Authorization: Bearer {{adminLogin.response.body.data.jwt_token}}
+Content-Type: application/json
+
+{
+  "key": "HF_MODEL",
+  "value": "zai-org/GLM-5.3:novita",
+  "description": "Model HuggingFace default"
+}
+
+### 10.3 Create Config — Validasi Gagal (key kosong) [Expect: 400 Bad Request]
+POST {{baseUrl}}/api/admin/configs
+Authorization: Bearer {{adminLogin.response.body.data.jwt_token}}
+Content-Type: application/json
+
+{
+  "key": "",
+  "value": "nilai_baru"
+}
+
+### 10.4 Create Config — Key Duplikat [Expect: 409 Conflict]
+POST {{baseUrl}}/api/admin/configs
+Authorization: Bearer {{adminLogin.response.body.data.jwt_token}}
+Content-Type: application/json
+
+{
+  "key": "HF_MODEL",
+  "value": "model/lain",
+  "description": "Key sudah ada"
+}
+
+### 10.5 Detail Config — GET /api/admin/configs/{{configId}}
+GET {{baseUrl}}/api/admin/configs/{{configId}}
+Authorization: Bearer {{adminLogin.response.body.data.jwt_token}}
+Accept: application/json
+
+### 10.6 Detail Config — Tidak Ditemukan [Expect: 404 Not Found]
+GET {{baseUrl}}/api/admin/configs/999999
+Authorization: Bearer {{adminLogin.response.body.data.jwt_token}}
+Accept: application/json
+
+### 10.7 Update Config — PUT /api/admin/configs/{{configId}}
+### Update value HF_API_KEY / HF_MODEL / HF_BASE_URL akan langsung dipakai request AI berikutnya
+PUT {{baseUrl}}/api/admin/configs/{{configId}}
+Authorization: Bearer {{adminLogin.response.body.data.jwt_token}}
+Content-Type: application/json
+
+{
+  "value": "zai-org/GLM-5.3:novita",
+  "description": "Model HuggingFace default (diubah via admin)"
+}
+
+### 10.8 Delete Config — DELETE /api/admin/configs/{{configId}}
+### Setelah dihapus, nilai akan fallback ke ENV
+DELETE {{baseUrl}}/api/admin/configs/{{configId}}
+Authorization: Bearer {{adminLogin.response.body.data.jwt_token}}
+Accept: application/json
+
+### 10.9 Akses Config — Pakai JWT User Biasa [Expect: 403 Forbidden]
+GET {{baseUrl}}/api/admin/configs
+Authorization: Bearer {{login.response.body.data.jwt_token}}
+Accept: application/json
+
+### 10.10 Akses Config — Tanpa JWT [Expect: 401 Unauthorized]
+GET {{baseUrl}}/api/admin/configs
+Accept: application/json

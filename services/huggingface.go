@@ -2,20 +2,28 @@
 // Menggunakan format OpenAI-compatible Chat Completions (POST /v1/chat/completions)
 // Dokumentasi: https://huggingface.co/docs/inference-providers
 //
-// Kompatibel dengan OpenAI SDK, 9router, One-API, NextChat, LibreChat, dll.
+// Kompatibel dengan OpenAI SDK, 9router, One-API, NextChat, dll.
+// [UPGRADE v3] — Memvalidasi model aktif dari database sebelum request diteruskan ke HuggingFace.
+// [UPGRADE 3] — API key & base URL dibaca dari tabel configs (fallback ke ENV).
 
 package services
 
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"time"
 
 	"ai-generate-api/config"
+	"ai-generate-api/models"
+
+	"gorm.io/gorm"
 )
+
+var ErrModelUnavailable = errors.New("model tidak tersedia")
 
 // HuggingFaceService mengelola komunikasi dengan HuggingFace Router API
 type HuggingFaceService struct {
@@ -71,7 +79,13 @@ type chatCompletionResponse struct {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (s *HuggingFaceService) Generate(model, prompt string) (string, error) {
-	url := fmt.Sprintf("%s/chat/completions", s.Env.HFBaseURL)
+	if err := validateActiveModel(model); err != nil {
+		return "", err
+	}
+
+	// [UPGRADE 3] — Ambil config HF dari DB (fallback ENV) setiap request.
+	apiKey, _, baseURL := GetHuggingFaceConfig()
+	url := fmt.Sprintf("%s/chat/completions", baseURL)
 
 	reqBody := chatCompletionRequest{
 		Model: model,
@@ -93,7 +107,7 @@ func (s *HuggingFaceService) Generate(model, prompt string) (string, error) {
 		return "", fmt.Errorf("gagal membuat HTTP request: %w", err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+s.Env.HFApiKey)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := s.HTTPClient.Do(req)
@@ -134,14 +148,27 @@ func (s *HuggingFaceService) Generate(model, prompt string) (string, error) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (s *HuggingFaceService) ForwardChatCompletions(rawBody []byte) ([]byte, int, error) {
-	url := fmt.Sprintf("%s/chat/completions", s.Env.HFBaseURL)
+	var reqBody struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(rawBody, &reqBody); err != nil {
+		return marshalInvalidModelResponse("Format request ke HuggingFace tidak valid"), http.StatusBadRequest, nil
+	}
+
+	if err := validateActiveModel(reqBody.Model); err != nil {
+		return marshalInvalidModelResponse(err.Error()), http.StatusBadRequest, nil
+	}
+
+	// [UPGRADE 3] — Ambil config HF dari DB (fallback ENV) setiap request.
+	apiKey, _, baseURL := GetHuggingFaceConfig()
+	url := fmt.Sprintf("%s/chat/completions", baseURL)
 
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(rawBody))
 	if err != nil {
 		return nil, http.StatusInternalServerError, fmt.Errorf("gagal membuat request: %w", err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+s.Env.HFApiKey)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := s.HTTPClient.Do(req)
@@ -156,4 +183,41 @@ func (s *HuggingFaceService) ForwardChatCompletions(rawBody []byte) ([]byte, int
 	}
 
 	return respBodyBytes, resp.StatusCode, nil
+}
+
+// IsModelUnavailableError membantu handler membedakan error validasi model dan error upstream.
+func IsModelUnavailableError(err error) bool {
+	return errors.Is(err, ErrModelUnavailable)
+}
+
+func validateActiveModel(model string) error {
+	if model == "" {
+		return fmt.Errorf("%w: slug model wajib diisi", ErrModelUnavailable)
+	}
+
+	var aiModel models.AIModel
+	err := config.DB.Where("slug = ? AND is_active = ?", model, true).First(&aiModel).Error
+	if err == nil {
+		return nil
+	}
+
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return fmt.Errorf("%w: model '%s' tidak aktif atau tidak ditemukan", ErrModelUnavailable, model)
+	}
+
+	return fmt.Errorf("gagal memvalidasi model '%s': %w", model, err)
+}
+
+func marshalInvalidModelResponse(message string) []byte {
+	respBytes, err := json.Marshal(map[string]interface{}{
+		"error": map[string]interface{}{
+			"type":    "invalid_request_error",
+			"message": message,
+		},
+	})
+	if err != nil {
+		return []byte(`{"error":{"type":"invalid_request_error","message":"Model tidak valid"}}`)
+	}
+
+	return respBytes
 }

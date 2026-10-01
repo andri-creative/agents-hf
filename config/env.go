@@ -11,9 +11,9 @@ import (
 
 // EnvConfig menyimpan semua konfigurasi yang dibaca dari environment
 type EnvConfig struct {
-	AppPort         string
-	AppEnv          string
-	DatabaseURL     string // Prioritas utama — connection string lengkap (misal dari Prisma/Railway/Supabase)
+	AppPort     string
+	AppEnv      string
+	DatabaseURL string // Prioritas utama — connection string lengkap (misal dari Prisma/Railway/Supabase)
 	// Parameter individual (digunakan jika DATABASE_URL tidak ada)
 	DBHost          string
 	DBPort          string
@@ -27,6 +27,10 @@ type EnvConfig struct {
 	HFModel         string
 	HFBaseURL       string
 }
+
+// Env menyimpan konfigurasi environment global.
+// [UPGRADE 3] — Dipakai oleh config_service untuk fallback nilai dari ENV.
+var Env *EnvConfig
 
 // LoadEnv membaca environment variables dan mengembalikan EnvConfig
 // Jika JWT_SECRET kosong, server akan gagal start (log.Fatal)
@@ -62,10 +66,10 @@ func LoadEnv() *EnvConfig {
 		appPort = getEnvOrDefault("APP_PORT", "8080")
 	}
 
-	return &EnvConfig{
-		AppPort:         appPort,
-		AppEnv:          getEnvOrDefault("APP_ENV", "development"),
-		DatabaseURL:     databaseURL,
+	cfg := &EnvConfig{
+		AppPort:     appPort,
+		AppEnv:      getEnvOrDefault("APP_ENV", "development"),
+		DatabaseURL: databaseURL,
 		// Parameter individual sebagai fallback
 		DBHost:          getEnvOrDefault("DB_HOST", "localhost"),
 		DBPort:          getEnvOrDefault("DB_PORT", "5432"),
@@ -79,6 +83,11 @@ func LoadEnv() *EnvConfig {
 		HFModel:         getEnvOrDefault("HF_MODEL", "zai-org/GLM-5.3:novita"),
 		HFBaseURL:       getEnvOrDefault("HF_BASE_URL", "https://router.huggingface.co/v1"),
 	}
+
+	// Set global Env agar bisa dipakai config_service
+	Env = cfg
+
+	return cfg
 }
 
 // getEnvOrDefault mengambil nilai environment variable atau mengembalikan nilai default

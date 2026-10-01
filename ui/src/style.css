@@ -1,0 +1,45 @@
+@import "tailwindcss";
+
+/* Dark mode manual pakai class */
+@variant dark (&:where(.dark, .dark *));
+
+/* Custom design tokens */
+@theme {
+  /* Warna primary (sesuaikan dengan shadcn theme) */
+  --color-primary: oklch(0.55 0.2 250);
+  --color-primary-foreground: oklch(0.98 0 0);
+  
+  /* Background & Foreground colors */
+  --color-background: oklch(1 0 0);
+  --color-foreground: oklch(0.15 0 0);
+  
+  /* Custom breakpoint untuk TV */
+  --breakpoint-tv: 1920px;
+  --breakpoint-3xl: 2560px;
+  
+  /* Font */
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Base styles */
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+}
+
+/* Dark mode colors */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-background: oklch(0.12 0 0);
+    --color-foreground: oklch(0.95 0 0);
+  }
+}
+
+.dark {
+  --color-background: oklch(0.12 0 0);
+  --color-foreground: oklch(0.95 0 0);
+}

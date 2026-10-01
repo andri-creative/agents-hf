@@ -3,6 +3,7 @@
 // - POST /v1/messages (Dual-mode: Single prompt & Anthropic Messages API untuk 9router dengan full SSE streaming)
 // - GET  /v1/models & /models (OpenAI & Anthropic model list untuk 9router "Import from /models")
 // - POST /v1/chat/completions & /chat/completions (OpenAI chat completions dengan full SSE streaming untuk Trae/Cursor)
+// [UPGRADE v3] — Mengambil model aktif dari database dan memvalidasi slug model sebelum dipakai.
 
 package handlers
 
@@ -17,11 +18,13 @@ import (
 
 	"ai-generate-api/config"
 	"ai-generate-api/dto"
+	"ai-generate-api/models"
 	"ai-generate-api/services"
 	"ai-generate-api/utils"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
+	"gorm.io/gorm"
 )
 
 // AIHandler menyimpan dependensi yang dibutuhkan oleh handler AI
@@ -86,6 +89,10 @@ func (h *AIHandler) Generate(c *gin.Context) {
 
 	generatedText, err := h.HFService.Generate(model, req.Prompt)
 	if err != nil {
+		if services.IsModelUnavailableError(err) {
+			utils.ErrorResponse(c, http.StatusBadRequest, "Model tidak valid", err.Error())
+			return
+		}
 		utils.ErrorResponse(c, http.StatusBadGateway, "Gagal mendapatkan response dari HuggingFace", err.Error())
 		return
 	}
@@ -337,43 +344,27 @@ func (h *AIHandler) handleAnthropicMessages(c *gin.Context, payload map[string]i
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (h *AIHandler) GetModels(c *gin.Context) {
-	now := time.Now().Unix()
-	defaultModel := h.Env.HFModel
+	var aiModels []models.AIModel
+	if err := config.DB.Where("is_active = ?", true).Order("id ASC").Find(&aiModels).Error; err != nil {
+		utils.ErrorResponse(c, http.StatusInternalServerError, "Gagal mengambil daftar model", err.Error())
+		return
+	}
 
-	models := []dto.ModelItem{
-		{
-			ID:          defaultModel,
+	respItems := make([]dto.ModelItem, 0, len(aiModels))
+	for _, model := range aiModels {
+		respItems = append(respItems, dto.ModelItem{
+			ID:          model.Slug,
 			Type:        "model",
 			Object:      "model",
-			DisplayName: defaultModel,
-			Created:     now,
+			DisplayName: model.Name,
+			Created:     model.CreatedAt.Unix(),
 			OwnedBy:     "huggingface",
-		},
-	}
-
-	alternatives := []string{
-		"zai-org/GLM-5.3:novita",
-		"mistralai/Mistral-7B-Instruct-v0.2",
-		"meta-llama/Meta-Llama-3-8B-Instruct",
-		"Qwen/Qwen2.5-72B-Instruct",
-	}
-
-	for _, alt := range alternatives {
-		if alt != defaultModel {
-			models = append(models, dto.ModelItem{
-				ID:          alt,
-				Type:        "model",
-				Object:      "model",
-				DisplayName: alt,
-				Created:     now,
-				OwnedBy:     "huggingface",
-			})
-		}
+		})
 	}
 
 	c.JSON(http.StatusOK, dto.ModelListResponse{
 		Object: "list",
-		Data:   models,
+		Data:   respItems,
 	})
 }
 
@@ -382,17 +373,28 @@ func (h *AIHandler) GetModels(c *gin.Context) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func (h *AIHandler) GetModelDetail(c *gin.Context) {
-	modelID := c.Param("model")
-	if modelID == "" {
-		modelID = h.Env.HFModel
+	modelSlug := strings.TrimPrefix(c.Param("model"), "/")
+	if modelSlug == "" {
+		modelSlug = h.Env.HFModel
+	}
+
+	var aiModel models.AIModel
+	if err := config.DB.Where("slug = ? AND is_active = ?", modelSlug, true).First(&aiModel).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			utils.ErrorResponse(c, http.StatusNotFound, "Model tidak ditemukan", nil)
+			return
+		}
+
+		utils.ErrorResponse(c, http.StatusInternalServerError, "Gagal mengambil detail model", err.Error())
+		return
 	}
 
 	c.JSON(http.StatusOK, dto.ModelItem{
-		ID:          modelID,
+		ID:          aiModel.Slug,
 		Type:        "model",
 		Object:      "model",
-		DisplayName: modelID,
-		Created:     time.Now().Unix(),
+		DisplayName: aiModel.Name,
+		Created:     aiModel.CreatedAt.Unix(),
 		OwnedBy:     "huggingface",
 	})
 }

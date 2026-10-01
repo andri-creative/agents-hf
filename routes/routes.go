@@ -1,15 +1,19 @@
 // routes/routes.go — Pendaftaran semua route/endpoint API
 // Menggabungkan handler, middleware, dan konfigurasi routing Gin
+// [UPGRADE v3] — Menambahkan route admin untuk CRUD ai_models.
+// [UPGRADE 1 & 3] — Menambahkan route /api/tokens dan /api/admin/configs.
 
 package routes
 
 import (
 	"net/http"
+	"time"
 
 	"ai-generate-api/config"
 	"ai-generate-api/handlers"
 	"ai-generate-api/middleware"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 )
 
@@ -25,9 +29,22 @@ func SetupRoutes(env *config.EnvConfig) *gin.Engine {
 	r := gin.Default()
 	_ = r.SetTrustedProxies(nil)
 
+	// Konfigurasi CORS untuk frontend
+	r.Use(cors.New(cors.Config{
+		AllowOrigins:     []string{"http://localhost:5173"}, // Frontend Vite dev server
+		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
+		ExposeHeaders:    []string{"Content-Length"},
+		AllowCredentials: true,
+		MaxAge:           12 * time.Hour,
+	}))
+
 	// Inisialisasi handler dengan dependensi yang dibutuhkan
 	authHandler := handlers.NewAuthHandler(env.JWTSecret, env.JWTExpiredHours)
 	aiHandler := handlers.NewAIHandler(env)
+	modelHandler := handlers.NewModelHandler()
+	tokenHandler := handlers.NewTokenHandler()
+	configHandler := handlers.NewConfigHandler()
 
 	// ─────────────────────────────────────────────
 	// Endpoint publik — tidak membutuhkan autentikasi
@@ -44,9 +61,9 @@ func SetupRoutes(env *config.EnvConfig) *gin.Engine {
 	// Mendukung akses via /v1/models dan /models
 	// ─────────────────────────────────────────────
 	r.GET("/v1/models", aiHandler.GetModels)
-	r.GET("/v1/models/:model", aiHandler.GetModelDetail)
+	r.GET("/v1/models/*model", aiHandler.GetModelDetail)
 	r.GET("/models", aiHandler.GetModels)
-	r.GET("/models/:model", aiHandler.GetModelDetail)
+	r.GET("/models/*model", aiHandler.GetModelDetail)
 	r.GET("/v1/messages/models", aiHandler.GetModels)
 
 	// Group endpoint /api untuk autentikasi
@@ -64,6 +81,31 @@ func SetupRoutes(env *config.EnvConfig) *gin.Engine {
 	protected.Use(middleware.JWTAuth(env.JWTSecret))
 	{
 		protected.GET("/me", authHandler.GetProfile) // GET /api/me
+
+		// [UPGRADE 1] — Endpoint pengelolaan API token milik user yang login
+		protected.GET("/tokens", tokenHandler.List)
+		protected.POST("/tokens", tokenHandler.Create)
+		protected.GET("/tokens/:id", tokenHandler.Detail)
+		protected.PUT("/tokens/:id/status", tokenHandler.UpdateStatus)
+		protected.DELETE("/tokens/:id", tokenHandler.Delete)
+	}
+
+	// Endpoint admin — membutuhkan JWT token + role admin
+	admin := r.Group("/api/admin")
+	admin.Use(middleware.JWTAuth(env.JWTSecret), middleware.AdminOnly())
+	{
+		admin.GET("/models", modelHandler.List)
+		admin.POST("/models", modelHandler.Create)
+		admin.GET("/models/:id", modelHandler.Detail)
+		admin.PUT("/models/:id", modelHandler.Update)
+		admin.DELETE("/models/:id", modelHandler.Delete)
+
+		// [UPGRADE 3] — Endpoint pengelolaan config HF dari admin panel
+		admin.GET("/configs", configHandler.List)
+		admin.POST("/configs", configHandler.Create)
+		admin.GET("/configs/:id", configHandler.Detail)
+		admin.PUT("/configs/:id", configHandler.Update)
+		admin.DELETE("/configs/:id", configHandler.Delete)
 	}
 
 	// ─────────────────────────────────────────────
