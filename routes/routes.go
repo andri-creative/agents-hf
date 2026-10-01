@@ -23,6 +23,7 @@ func SetupRoutes(env *config.EnvConfig) *gin.Engine {
 
 	// Buat router Gin dengan default middleware (Logger + Recovery)
 	r := gin.Default()
+	_ = r.SetTrustedProxies(nil)
 
 	// Inisialisasi handler dengan dependensi yang dibutuhkan
 	authHandler := handlers.NewAuthHandler(env.JWTSecret, env.JWTExpiredHours)

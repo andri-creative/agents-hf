@@ -55,8 +55,15 @@ func LoadEnv() *EnvConfig {
 		databaseURL = os.Getenv("PRISMA_DATABASE_URL")
 	}
 
+	// Cek PORT dari environment (otomatis di-inject oleh Vercel/Render/Heroku)
+	// Jika tidak ada, gunakan APP_PORT, default 8080
+	appPort := os.Getenv("PORT")
+	if appPort == "" {
+		appPort = getEnvOrDefault("APP_PORT", "8080")
+	}
+
 	return &EnvConfig{
-		AppPort:         getEnvOrDefault("APP_PORT", "8080"),
+		AppPort:         appPort,
 		AppEnv:          getEnvOrDefault("APP_ENV", "development"),
 		DatabaseURL:     databaseURL,
 		// Parameter individual sebagai fallback
@@ -69,8 +76,8 @@ func LoadEnv() *EnvConfig {
 		JWTSecret:       jwtSecret,
 		JWTExpiredHours: jwtExpiredHours,
 		HFApiKey:        getEnvOrDefault("HF_API_KEY", ""),
-		HFModel:         getEnvOrDefault("HF_MODEL", "mistralai/Mistral-7B-Instruct-v0.2"),
-		HFBaseURL:       getEnvOrDefault("HF_BASE_URL", "https://api-inference.huggingface.co"),
+		HFModel:         getEnvOrDefault("HF_MODEL", "zai-org/GLM-5.3:novita"),
+		HFBaseURL:       getEnvOrDefault("HF_BASE_URL", "https://router.huggingface.co/v1"),
 	}
 }
 
