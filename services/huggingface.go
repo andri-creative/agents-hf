@@ -2,9 +2,7 @@
 // Menggunakan format OpenAI-compatible Chat Completions (POST /v1/chat/completions)
 // Dokumentasi: https://huggingface.co/docs/inference-providers
 //
-// Contoh Python equivalent:
-//   client = OpenAI(base_url="https://router.huggingface.co/v1", api_key=HF_TOKEN)
-//   completion = client.chat.completions.create(model="zai-org/GLM-5.3:novita", messages=[...])
+// Kompatibel dengan OpenAI SDK, 9router, One-API, NextChat, LibreChat, dll.
 
 package services
 
@@ -68,18 +66,13 @@ type chatCompletionResponse struct {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Generate — memanggil HuggingFace Router API dan mengembalikan teks AI
+// Generate — memanggil HuggingFace Router API dan mengembalikan teks AI (string)
+// Digunakan oleh endpoint POST /v1/messages
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Generate memanggil POST /v1/chat/completions ke HuggingFace Router
-// model: nama model (misal: "zai-org/GLM-5.3:novita")
-// prompt: teks input dari user — dikemas sebagai pesan role "user"
 func (s *HuggingFaceService) Generate(model, prompt string) (string, error) {
-	// Endpoint OpenAI-compatible: {HF_BASE_URL}/chat/completions
-	// HF_BASE_URL sudah mengandung /v1, jadi: https://router.huggingface.co/v1/chat/completions
 	url := fmt.Sprintf("%s/chat/completions", s.Env.HFBaseURL)
 
-	// Susun request body dalam format OpenAI Chat Completions
 	reqBody := chatCompletionRequest{
 		Model: model,
 		Messages: []chatMessage{
@@ -90,56 +83,77 @@ func (s *HuggingFaceService) Generate(model, prompt string) (string, error) {
 		},
 	}
 
-	// Serialize request body ke JSON
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
 		return "", fmt.Errorf("gagal marshal request body: %w", err)
 	}
 
-	// Buat HTTP POST request
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(bodyBytes))
 	if err != nil {
 		return "", fmt.Errorf("gagal membuat HTTP request: %w", err)
 	}
 
-	// Set headers — sama persis dengan Python OpenAI client
 	req.Header.Set("Authorization", "Bearer "+s.Env.HFApiKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	// Kirim request ke HuggingFace Router
 	resp, err := s.HTTPClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("gagal terhubung ke HuggingFace Router API: %w", err)
 	}
 	defer resp.Body.Close()
 
-	// Baca response body
 	respBodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("gagal membaca response body: %w", err)
 	}
 
-	// Cek status code — jika bukan 200, kembalikan error dengan detail dari HF
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("HuggingFace Router API error (status %d): %s", resp.StatusCode, string(respBodyBytes))
 	}
 
-	// Parse response dalam format OpenAI Chat Completions
 	var chatResp chatCompletionResponse
 	if err := json.Unmarshal(respBodyBytes, &chatResp); err != nil {
 		return "", fmt.Errorf("gagal parse response: %w (raw: %s)", err, string(respBodyBytes))
 	}
 
-	// Pastikan ada minimal 1 choice dalam response
 	if len(chatResp.Choices) == 0 {
 		return "", fmt.Errorf("HuggingFace mengembalikan response kosong (choices=[])")
 	}
 
-	// Ambil konten pesan dari choice pertama (setara dengan choices[0].message.content di Python)
 	content := chatResp.Choices[0].Message.Content
 	if content == "" {
 		return "", fmt.Errorf("konten response kosong")
 	}
 
 	return content, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ForwardChatCompletions — meneruskan request Chat Completions langsung ke HF Router
+// Digunakan oleh endpoint POST /v1/chat/completions untuk 9router / OpenAI SDK
+// ─────────────────────────────────────────────────────────────────────────────
+
+func (s *HuggingFaceService) ForwardChatCompletions(rawBody []byte) ([]byte, int, error) {
+	url := fmt.Sprintf("%s/chat/completions", s.Env.HFBaseURL)
+
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(rawBody))
+	if err != nil {
+		return nil, http.StatusInternalServerError, fmt.Errorf("gagal membuat request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+s.Env.HFApiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := s.HTTPClient.Do(req)
+	if err != nil {
+		return nil, http.StatusBadGateway, fmt.Errorf("gagal terhubung ke HuggingFace Router: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, http.StatusInternalServerError, fmt.Errorf("gagal membaca response body: %w", err)
+	}
+
+	return respBodyBytes, resp.StatusCode, nil
 }

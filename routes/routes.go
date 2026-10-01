@@ -38,6 +38,17 @@ func SetupRoutes(env *config.EnvConfig) *gin.Engine {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
+	// ─────────────────────────────────────────────
+	// Endpoint Models (OpenAI-compatible)
+	// Dibutuhkan oleh 9router, One-API, NextChat saat "Fetch Models"
+	// Mendukung akses via /v1/models dan /models
+	// ─────────────────────────────────────────────
+	r.GET("/v1/models", aiHandler.GetModels)
+	r.GET("/v1/models/:model", aiHandler.GetModelDetail)
+	r.GET("/models", aiHandler.GetModels)
+	r.GET("/models/:model", aiHandler.GetModelDetail)
+	r.GET("/v1/messages/models", aiHandler.GetModels)
+
 	// Group endpoint /api untuk autentikasi
 	api := r.Group("/api")
 	{
@@ -56,13 +67,25 @@ func SetupRoutes(env *config.EnvConfig) *gin.Engine {
 	}
 
 	// ─────────────────────────────────────────────
-	// Endpoint AI — membutuhkan API Key (bukan JWT)
+	// Endpoint AI / OpenAI-compatible (Protected API Key)
+	// Mendukung:
+	// - POST /v1/messages         (Format custom prompt)
+	// - POST /v1/chat/completions (Format standar OpenAI/9router)
+	// - POST /chat/completions    (Format standar OpenAI/9router tanpa prefix)
 	// ─────────────────────────────────────────────
 
 	v1 := r.Group("/v1")
 	v1.Use(middleware.APIKeyAuth())
 	{
-		v1.POST("/messages", aiHandler.Generate) // POST /v1/messages
+		v1.POST("/messages", aiHandler.Generate)                // POST /v1/messages
+		v1.POST("/chat/completions", aiHandler.ChatCompletions) // POST /v1/chat/completions
+	}
+
+	// Router root tanpa prefix /v1 untuk client yang baseURL-nya sudah /v1
+	rootChat := r.Group("")
+	rootChat.Use(middleware.APIKeyAuth())
+	{
+		rootChat.POST("/chat/completions", aiHandler.ChatCompletions)
 	}
 
 	return r

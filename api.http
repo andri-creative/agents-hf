@@ -5,10 +5,10 @@
 ### Jalankan server terlebih dahulu: `go run main.go`
 ### ====================================================================
 
-@baseUrl = http://localhost:8080
+@baseUrl = https://agents-hf.vercel.app
 
 # Variabel manual (isi di sini jika ingin paste token secara manual)
-@authToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoxLCJ1c2VybmFtZSI6ImJ1ZGkxMjMiLCJpc3MiOiJhaS1nZW5lcmF0ZS1hcGkiLCJleHAiOjE3OTA5MDg0NTAsImlhdCI6MTc5MDgyMjA1MH0.PNkid3aBxlLqRqliJYUcCOv4kEY-6su_N0sxlF1fN98
+@authToken = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoxLCJ1c2VybmFtZSI6ImJ1ZGkxMjMiLCJpc3MiOiJhaS1nZW5lcmF0ZS1hcGkiLCJleHAiOjE3OTA5MTYyMDUsImlhdCI6MTc5MDgyOTgwNX0.g5BRhjQnbW_rh6deQUJrSAPh_t89wknpl8ZECoWaM7s
 @userApiKey = hf_a83ce77f1d4603cbc2ddce83453d8de1f4fceda654705c7355c8ddc0a1944017
 
 
@@ -88,7 +88,6 @@ Content-Type: application/json
 ### ====================================================================
 
 ### 4.1 Get Profile — Mengambil token otomatis dari response login
-### Jika client mendukung dynamic variable:
 GET {{baseUrl}}/api/me
 Authorization: Bearer {{login.response.body.data.jwt_token}}
 Accept: application/json
@@ -104,54 +103,101 @@ Accept: application/json
 
 
 ### ====================================================================
-### 5. AI GENERATE (PROTECTED BY API KEY)
+### 5. OPENAI-COMPATIBLE MODELS (UNTUK 9ROUTER / ONE-API / NEXTCHAT)
 ### ====================================================================
 
-### 5.1 AI Generate — Menggunakan model default dari .env (zai-org/GLM-5.3:novita)
-### API Token diambil otomatis dari response login / register
-# @name aiGenerateDefault
+### 5.1 Get Models List — GET /v1/models (Dibutuhkan saat 9router klik "Fetch Models")
+# @name getModelsV1
+GET {{baseUrl}}/v1/models
+Accept: application/json
+
+### 5.2 Get Models List — GET /models (Untuk router yang baseURL-nya tanpa /v1)
+GET {{baseUrl}}/models
+Accept: application/json
+
+### 5.3 Get Model Detail — GET /v1/models/zai-org/GLM-5.3:novita
+GET {{baseUrl}}/v1/models/zai-org/GLM-5.3:novita
+Accept: application/json
+
+
+### ====================================================================
+### 6. OPENAI-COMPATIBLE CHAT COMPLETIONS (UNTUK 9ROUTER / OPENAI SDK)
+### ====================================================================
+
+### 6.1 Chat Completions — POST /v1/chat/completions (Standar 9router)
+# @name chatCompletions
+POST {{baseUrl}}/v1/chat/completions
+Content-Type: application/json
+Authorization: Bearer {{userApiKey}}
+
+{
+  "model": "zai-org/GLM-5.3:novita",
+  "messages": [
+    {
+      "role": "system",
+      "content": "Kamu adalah asisten pintar."
+    },
+    {
+      "role": "user",
+      "content": "Halo! Siapa kamu dan apa kemampuanmu?"
+    }
+  ]
+}
+
+### 6.2 Chat Completions — POST /chat/completions (Untuk router dengan baseURL .../v1)
+POST {{baseUrl}}/chat/completions
+Content-Type: application/json
+Authorization: Bearer {{userApiKey}}
+
+{
+  "model": "zai-org/GLM-5.3:novita",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Jelaskan apa itu REST API dalam 1 kalimat."
+    }
+  ]
+}
+
+
+### ====================================================================
+### 7. AI GENERATE (CUSTOM SINGLE PROMPT /v1/messages)
+### ====================================================================
+
+### 7.1 AI Generate — Menggunakan model default dari .env
 POST {{baseUrl}}/v1/messages
 Content-Type: application/json
-X-API-Key: {{login.response.body.data.api_token}}
+X-API-Key: {{userApiKey}}
 
 {
   "prompt": "Jelaskan keunggulan bahasa Go (Golang) dalam 2 kalimat singkat."
 }
 
-### 5.2 AI Generate — Custom Model & Prompt Bahasa Inggris
+### 7.2 AI Generate — Custom Model & Prompt
 POST {{baseUrl}}/v1/messages
 Content-Type: application/json
-X-API-Key: {{login.response.body.data.api_token}}
+X-API-Key: {{userApiKey}}
 
 {
   "model": "zai-org/GLM-5.3:novita",
   "prompt": "Halo, Apa itu AI?"
 }
 
-### 5.3 AI Generate — Menggunakan Header Authorization: Bearer <api_token>
+### 7.3 AI Generate — Menggunakan Header Authorization: Bearer <api_token>
 POST {{baseUrl}}/v1/messages
 Content-Type: application/json
-Authorization: Bearer {{login.response.body.data.api_token}}
+Authorization: Bearer {{userApiKey}}
 
 {
   "prompt": "Sebutkan 3 tips produktivitas programming."
 }
 
-### 5.4 AI Generate — Menggunakan variable manual @userApiKey
-POST {{baseUrl}}/v1/messages
-Content-Type: application/json
-X-API-Key: {{userApiKey}}
-
-{
-  "prompt": "Halo AI, perkenalkan dirimu!"
-}
-
 
 ### ====================================================================
-### 6. NEGATIVE TESTING / ERROR CASES UNTUK AI ENDPOINT
+### 8. NEGATIVE TESTING / ERROR CASES UNTUK AI ENDPOINT
 ### ====================================================================
 
-### 6.1 AI Generate — Tanpa API Key [Expect: 401 Unauthorized]
+### 8.1 AI Generate — Tanpa API Key [Expect: 401 Unauthorized]
 POST {{baseUrl}}/v1/messages
 Content-Type: application/json
 
@@ -159,7 +205,7 @@ Content-Type: application/json
   "prompt": "Tes tanpa API key"
 }
 
-### 6.2 AI Generate — API Key Salah / Palsu [Expect: 401 Unauthorized]
+### 8.2 AI Generate — API Key Salah / Palsu [Expect: 401 Unauthorized]
 POST {{baseUrl}}/v1/messages
 Content-Type: application/json
 X-API-Key: hf_invalid_token_1234567890
@@ -168,10 +214,10 @@ X-API-Key: hf_invalid_token_1234567890
   "prompt": "Tes dengan token palsu"
 }
 
-### 6.3 AI Generate — Prompt Kosong / Validasi Gagal [Expect: 400 Bad Request]
+### 8.3 AI Generate — Prompt Kosong / Validasi Gagal [Expect: 400 Bad Request]
 POST {{baseUrl}}/v1/messages
 Content-Type: application/json
-X-API-Key: {{login.response.body.data.api_token}}
+X-API-Key: {{userApiKey}}
 
 {
   "prompt": ""
